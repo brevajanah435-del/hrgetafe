@@ -1,18 +1,23 @@
 <?php
 /**
- * Attendance Report Generation
+ * Attendance Report Generation - CORRECTED VERSION
  */
 
 session_start();
 require_once '../config/database.php';
 require_once '../includes/security.php';
+require_once '../includes/error_handler.php';
 
 requireRole([1, 2]); // Admin and Staff only
 
-$month = $_GET['month'] ?? date('m');
-$year = $_GET['year'] ?? date('Y');
-$department = $_GET['department'] ?? null;
-$export_format = $_GET['export'] ?? null;
+$month = isset($_GET['month']) ? sanitizeInput($_GET['month']) : date('m');
+$year = isset($_GET['year']) ? sanitizeInput($_GET['year']) : date('Y');
+$department = isset($_GET['department']) ? sanitizeInput($_GET['department']) : null;
+$export_format = isset($_GET['export']) ? sanitizeInput($_GET['export']) : null;
+
+// Validate month and year
+$month = str_pad($month, 2, '0', STR_PAD_LEFT);
+$year = intval($year);
 
 // Build query
 $query = "
@@ -28,13 +33,13 @@ $query = "
     LEFT JOIN attendance a ON e.employee_id = a.employee_id 
         AND MONTH(a.clock_in) = ? 
         AND YEAR(a.clock_in) = ?
-    WHERE 1=1
+    WHERE e.status = 'active'
 ";
 
 $params = [$month, $year];
 $types = 'ii';
 
-if ($department) {
+if ($department && !empty($department)) {
     $query .= " AND e.department = ?";
     $params[] = $department;
     $types .= 's';
@@ -43,12 +48,18 @@ if ($department) {
 $query .= " GROUP BY e.employee_id, e.employee_name, e.department ORDER BY e.employee_name";
 
 $stmt = $conn->prepare($query);
-if ($params) {
+if (!$stmt) {
+    die('Query error: ' . $conn->error);
+}
+
+if (count($params) > 0) {
     $stmt->bind_param($types, ...$params);
 }
+
 $stmt->execute();
 $result = $stmt->get_result();
 $records = $result->fetch_all(MYSQLI_ASSOC);
+$stmt->close();
 
 // Export to CSV
 if ($export_format === 'csv') {
@@ -56,55 +67,34 @@ if ($export_format === 'csv') {
     header('Content-Disposition: attachment; filename=attendance_report_' . $year . '_' . $month . '.csv');
     
     $output = fopen('php://output', 'w');
-    fputcsv($output, ['Employee ID', 'Name', 'Department', 'Total Days', 'Present', 'Incomplete', 'Avg Hours']);
-    
-    foreach ($records as $row) {
-        fputcsv($output, [
-            $row['employee_id'],
-            $row['employee_name'],
-            $row['department'],
-            $row['total_days'],
-            $row['present_days'],
-            $row['incomplete_days'],
-            round($row['avg_hours'], 2)
-        ]);
+    if ($output) {
+        fputcsv($output, ['Employee ID', 'Name', 'Department', 'Total Days', 'Present', 'Incomplete', 'Avg Hours']);
+        
+        foreach ($records as $row) {
+            fputcsv($output, [
+                $row['employee_id'],
+                $row['employee_name'],
+                $row['department'],
+                $row['total_days'],
+                $row['present_days'],
+                $row['incomplete_days'],
+                $row['avg_hours'] ? round($row['avg_hours'], 2) : 0
+            ]);
+        }
+        fclose($output);
     }
-    fclose($output);
-    exit;
-}
-
-// Export to PDF (requires TCPDF or FPDF)
-if ($export_format === 'pdf') {
-    // Simplified PDF generation
-    header('Content-Type: application/pdf');
-    header('Content-Disposition: attachment; filename=attendance_report_' . $year . '_' . $month . '.pdf');
-    
-    $pdf_content = "Attendance Report - " . date('F Y', mktime(0, 0, 0, $month, 1, $year)) . "\n\n";
-    $pdf_content .= str_repeat("-", 100) . "\n";
-    $pdf_content .= sprintf("%-12s %-30s %-20s %-12s %-10s %-12s %-10s\n", 
-        'Employee ID', 'Name', 'Department', 'Total Days', 'Present', 'Incomplete', 'Avg Hrs');
-    $pdf_content .= str_repeat("-", 100) . "\n";
-    
-    foreach ($records as $row) {
-        $pdf_content .= sprintf("%-12s %-30s %-20s %-12s %-10s %-12s %-10.1f\n",
-            $row['employee_id'],
-            substr($row['employee_name'], 0, 29),
-            $row['department'],
-            $row['total_days'],
-            $row['present_days'],
-            $row['incomplete_days'],
-            $row['avg_hours']
-        );
-    }
-    
-    echo $pdf_content;
     exit;
 }
 
 // Get departments for filter
-$dept_stmt = $conn->prepare("SELECT DISTINCT department FROM employees WHERE department IS NOT NULL ORDER BY department");
-$dept_stmt->execute();
-$departments = $dept_stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+$dept_stmt = $conn->prepare("SELECT DISTINCT department FROM employees WHERE department IS NOT NULL AND status = 'active' ORDER BY department");
+if ($dept_stmt) {
+    $dept_stmt->execute();
+    $departments = $dept_stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $dept_stmt->close();
+} else {
+    $departments = [];
+}
 
 ?>
 <!DOCTYPE html>
@@ -118,24 +108,23 @@ $departments = $dept_stmt->get_result()->fetch_all(MYSQLI_ASSOC);
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f5f5f5; padding: 20px; }
         .container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
         h1 { color: #333; margin-bottom: 30px; }
-        .filters { display: flex; gap: 15px; margin-bottom: 30px; flex-wrap: wrap; }
+        .filters { display: flex; gap: 15px; margin-bottom: 30px; flex-wrap: wrap; align-items: flex-end; }
         .filter-group { display: flex; flex-direction: column; }
         .filter-group label { color: #666; font-size: 12px; font-weight: bold; margin-bottom: 5px; }
-        .filter-group select, .filter-group input { padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 14px; }
+        .filter-group select { padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 14px; min-width: 120px; }
         button { background: #667eea; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
         button:hover { background: #5568d3; }
-        .export-btn { background: #28a745; margin-left: 10px; }
+        .export-btn { background: #28a745; margin-left: 10px; text-decoration: none; display: inline-block; }
         .export-btn:hover { background: #218838; }
         table { width: 100%; border-collapse: collapse; margin-top: 20px; }
         table th { background: #667eea; color: white; padding: 12px; text-align: left; font-weight: 600; }
         table td { padding: 12px; border-bottom: 1px solid #ddd; }
         table tbody tr:hover { background: #f9f9f9; }
-        .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 30px; }
+        .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 30px; }
         .stat-card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 10px; text-align: center; }
         .stat-card h3 { font-size: 14px; opacity: 0.9; margin-bottom: 10px; }
         .stat-card .value { font-size: 32px; font-weight: bold; }
-        .actions { text-align: center; margin-top: 30px; }
-        @media print { .filters, .actions, button { display: none; } }
+        @media print { .filters, button { display: none; } }
     </style>
 </head>
 <body>
@@ -143,7 +132,7 @@ $departments = $dept_stmt->get_result()->fetch_all(MYSQLI_ASSOC);
         <h1>📊 Attendance Report</h1>
         
         <div class="filters">
-            <form method="GET" style="display: flex; gap: 15px; flex-wrap: wrap;">
+            <form method="GET" style="display: flex; gap: 15px; flex-wrap: wrap; align-items: flex-end;">
                 <div class="filter-group">
                     <label>Month</label>
                     <select name="month">
@@ -176,21 +165,20 @@ $departments = $dept_stmt->get_result()->fetch_all(MYSQLI_ASSOC);
                     </select>
                 </div>
                 
-                <div class="filter-group" style="justify-content: flex-end;">
-                    <button type="submit">🔍 Filter</button>
-                </div>
+                <button type="submit">🔍 Filter</button>
             </form>
             
-            <div style="display: flex; gap: 10px;">
-                <a href="?month=<?php echo $month; ?>&year=<?php echo $year; ?>&department=<?php echo $department; ?>&export=csv" class="export-btn" style="padding: 10px 20px; text-decoration: none; color: white; border-radius: 5px;">📥 Export CSV</a>
-                <a href="?month=<?php echo $month; ?>&year=<?php echo $year; ?>&department=<?php echo $department; ?>&export=pdf" class="export-btn" style="padding: 10px 20px; text-decoration: none; color: white; border-radius: 5px;">📄 Export PDF</a>
-            </div>
+            <a href="?month=<?php echo $month; ?>&year=<?php echo $year; ?>&department=<?php echo escapeOutput($department); ?>&export=csv" class="export-btn">📥 Export CSV</a>
         </div>
         
         <?php
-        $total_present = array_sum(array_column($records, 'present_days'));
+        $total_present = 0;
+        $total_days = 0;
+        foreach ($records as $row) {
+            $total_present += $row['present_days'] ? $row['present_days'] : 0;
+            $total_days += $row['total_days'] ? $row['total_days'] : 0;
+        }
         $total_employees = count($records);
-        $total_days = array_sum(array_column($records, 'total_days'));
         $avg_attendance = $total_days > 0 ? round(($total_present / $total_days) * 100, 2) : 0;
         ?>
         
@@ -229,13 +217,13 @@ $departments = $dept_stmt->get_result()->fetch_all(MYSQLI_ASSOC);
             <tbody>
                 <?php foreach ($records as $row): ?>
                 <tr>
-                    <td><?php echo escapeOutput($row['employee_id']); ?></td>
+                    <td><?php echo escapeOutput((string)$row['employee_id']); ?></td>
                     <td><?php echo escapeOutput($row['employee_name']); ?></td>
                     <td><?php echo escapeOutput($row['department']); ?></td>
-                    <td><?php echo escapeOutput($row['total_days']); ?></td>
-                    <td><?php echo escapeOutput($row['present_days']); ?></td>
-                    <td><?php echo escapeOutput($row['incomplete_days']); ?></td>
-                    <td><?php echo round($row['avg_hours'], 2); ?> hrs</td>
+                    <td><?php echo $row['total_days'] ? $row['total_days'] : 0; ?></td>
+                    <td><?php echo $row['present_days'] ? $row['present_days'] : 0; ?></td>
+                    <td><?php echo $row['incomplete_days'] ? $row['incomplete_days'] : 0; ?></td>
+                    <td><?php echo $row['avg_hours'] ? round($row['avg_hours'], 2) : 0; ?> hrs</td>
                     <td>
                         <?php 
                         $attendance_pct = $row['total_days'] > 0 ? round(($row['present_days'] / $row['total_days']) * 100, 2) : 0;
@@ -247,7 +235,7 @@ $departments = $dept_stmt->get_result()->fetch_all(MYSQLI_ASSOC);
             </tbody>
         </table>
         
-        <div class="actions">
+        <div style="margin-top: 30px; text-align: center;">
             <button onclick="window.print()">🖨️ Print Report</button>
             <a href="../admin/dashboard.php" style="margin-left: 10px; padding: 10px 20px; background: #6c757d; color: white; text-decoration: none; border-radius: 5px;">← Back</a>
         </div>

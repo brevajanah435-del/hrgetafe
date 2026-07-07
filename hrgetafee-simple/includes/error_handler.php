@@ -1,65 +1,51 @@
 <?php
 /**
- * Error Handler and Logging
+ * Error Handler and Logging System
  */
 
-define('LOG_DIR', __DIR__ . '/../logs/');
+if (!defined('LOG_DIR')) {
+    define('LOG_DIR', dirname(__DIR__) . DIRECTORY_SEPARATOR . 'logs' . DIRECTORY_SEPARATOR);
+}
 
 // Create logs directory if not exists
 if (!is_dir(LOG_DIR)) {
-    mkdir(LOG_DIR, 0755, true);
+    @mkdir(LOG_DIR, 0755, true);
 }
-
-// Custom Error Handler
-set_error_handler(function($errno, $errstr, $errfile, $errline) {
-    $error_message = "[$errno] $errstr in $errfile on line $errline";
-    logError($error_message);
-    
-    // Log to file
-    error_log($error_message, 3, LOG_DIR . 'errors.log');
-    
-    // Show user-friendly message
-    if (defined('DEBUG_MODE') && DEBUG_MODE) {
-        echo "<pre>Error: $error_message</pre>";
-    } else {
-        // Show generic error
-        echo "An error occurred. Please contact support.";
-    }
-    
-    return true;
-});
-
-// Custom Exception Handler
-set_exception_handler(function($exception) {
-    $error_message = "Exception: " . $exception->getMessage() . " in " . $exception->getFile() . ":" . $exception->getLine();
-    logError($error_message);
-    error_log($error_message, 3, LOG_DIR . 'exceptions.log');
-    
-    if (defined('DEBUG_MODE') && DEBUG_MODE) {
-        echo "<pre>$error_message</pre>";
-    } else {
-        echo "An unexpected error occurred. Please contact support.";
-    }
-});
 
 // Log Error Function
 function logError($message) {
     $timestamp = date('Y-m-d H:i:s');
-    $log_entry = "[$timestamp] $message";
-    file_put_contents(LOG_DIR . 'system.log', $log_entry . PHP_EOL, FILE_APPEND);
+    $log_entry = "[$timestamp] ERROR: $message" . PHP_EOL;
+    @file_put_contents(LOG_DIR . 'errors.log', $log_entry, FILE_APPEND);
 }
 
-// Log Info
+// Log Info Function
 function logInfo($message) {
     $timestamp = date('Y-m-d H:i:s');
-    $log_entry = "[$timestamp] INFO: $message";
-    file_put_contents(LOG_DIR . 'info.log', $log_entry . PHP_EOL, FILE_APPEND);
+    $log_entry = "[$timestamp] INFO: $message" . PHP_EOL;
+    @file_put_contents(LOG_DIR . 'info.log', $log_entry, FILE_APPEND);
 }
 
-// Log Database Query
+// Log Database Query (use sparingly in production)
 function logDatabaseQuery($query) {
     $timestamp = date('Y-m-d H:i:s');
-    $log_entry = "[$timestamp] QUERY: $query";
-    file_put_contents(LOG_DIR . 'database.log', $log_entry . PHP_EOL, FILE_APPEND);
+    $log_entry = "[$timestamp] QUERY: $query" . PHP_EOL;
+    @file_put_contents(LOG_DIR . 'database.log', $log_entry, FILE_APPEND);
+}
+
+// Global Error Handler
+if (!defined('ERROR_HANDLER_REGISTERED')) {
+    define('ERROR_HANDLER_REGISTERED', true);
+    
+    set_error_handler(function($errno, $errstr, $errfile, $errline) {
+        $error_message = "[$errno] $errstr in $errfile on line $errline";
+        logError($error_message);
+        return true;
+    });
+    
+    set_exception_handler(function($exception) {
+        $error_message = "Exception: " . $exception->getMessage() . " in " . $exception->getFile() . ":" . $exception->getLine();
+        logError($error_message);
+    });
 }
 ?>
